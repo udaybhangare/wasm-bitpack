@@ -22,24 +22,162 @@ pub struct Wasm128;
 #[cfg(all(target_arch = "wasm32", target_feature = "simd128"))]
 mod imp {
     use super::Wasm128;
+    use crate::scalar::{check_num_bits, packed_len_bytes};
     use crate::traits::BitPacker;
+    use crate::Scalar;
 
     impl BitPacker for Wasm128 {
         const BLOCK_LEN: usize = 128;
 
+        /// Delegates to [`Scalar::num_bits`] — computing the minimum bit width is a cheap,
+        /// branchy, non-hot-path scan with no SIMD-shaped work in it, so there's no reason
+        /// for a second implementation to maintain and keep in sync.
         fn num_bits(decompressed: &[u32]) -> u8 {
-            let _ = decompressed;
-            todo!("implemented in Phase 2 (see plans/prompts/phase-2-wasm-simd-decode.md)")
+            Scalar::num_bits(decompressed)
         }
 
+        /// Delegates to [`Scalar::compress`] — encode is scalar-only in v0.1 (see
+        /// `plans/00-overview.md` §4 non-goals). This delegates rather than panicking so
+        /// that [`pack`](crate::pack), which picks [`Wasm128`] as its full-block codec on
+        /// this target, stays functional end-to-end instead of losing its encode path the
+        /// moment it's compiled for `wasm32` + `simd128`.
         fn compress(decompressed: &[u32], compressed: &mut [u8], num_bits: u8) -> usize {
-            let _ = (decompressed, compressed, num_bits);
-            todo!("Wasm128 encode is out of scope for v0.1 (see plans/00-overview.md §4)")
+            Scalar::compress(decompressed, compressed, num_bits)
         }
 
+        /// # Panics
+        ///
+        /// Panics if `decompressed.len() != Self::BLOCK_LEN`, if `compressed` is too small
+        /// to hold `Self::BLOCK_LEN * num_bits` bits, or if `num_bits` is `0` or greater
+        /// than `32` — identical preconditions to [`Scalar::decompress`], since both must
+        /// satisfy the same [`BitPacker::decompress`] contract.
         fn decompress(compressed: &[u8], decompressed: &mut [u32], num_bits: u8) -> usize {
-            let _ = (compressed, decompressed, num_bits);
-            todo!("implemented in Phase 2 (see plans/prompts/phase-2-wasm-simd-decode.md)")
+            assert_eq!(
+                decompressed.len(),
+                Self::BLOCK_LEN,
+                "decompressed.len() must be exactly BLOCK_LEN ({}), got {}",
+                Self::BLOCK_LEN,
+                decompressed.len()
+            );
+            check_num_bits(num_bits);
+            let needed = packed_len_bytes(Self::BLOCK_LEN, num_bits);
+            assert!(
+                compressed.len() >= needed,
+                "compressed buffer too small: need at least {needed} bytes, got {}",
+                compressed.len()
+            );
+
+            // SAFETY: `simd128` is enabled — this whole module is `cfg`-gated on it, which
+            // is `super::decode_macros::decode`'s sole target-feature precondition.
+            // `compressed.len() >= needed` and `decompressed.len() == Self::BLOCK_LEN` were
+            // just asserted above, satisfying its other two (panic-on-violation, not
+            // UB-risk) preconditions.
+            unsafe {
+                super::decode_macros::decode(num_bits, compressed, decompressed);
+            }
+
+            needed
+        }
+    }
+
+    /// The Scalar-vs-Wasm128 equivalence matrix — see `plans/04-testing-strategy.md` §4.
+    /// **The single most important test suite in the crate**: it's the entire correctness
+    /// argument for the hand-written SIMD decode path. Only compiles under this module's own
+    /// `cfg` gate, and is only meaningful run under `cargo test --target wasm32-wasip1`
+    /// (native runs never build this module at all, since `target_feature = "simd128"` is
+    /// off by default off-wasm32).
+    #[cfg(test)]
+    mod tests {
+        use super::Wasm128;
+        use crate::testing::gen;
+        use crate::{BitPacker, Scalar};
+        use proptest::prelude::*;
+
+        /// Every bit-width's `# Panics`-documented boundary is `Self::BLOCK_LEN`, so every
+        /// pattern here is exactly one block — the matrix compares `BitPacker::decompress`
+        /// directly, not the arbitrary-length `pack`/`unpack` wrapper.
+        #[allow(clippy::cast_possible_truncation)] // `block_len` is always 128; `i % modulus`
+                                                   // is always < 2^32 since `modulus <=
+                                                   // 2^32`
+        fn patterns(num_bits: u8) -> [(&'static str, Vec<u32>); 5] {
+            let block_len = Scalar::BLOCK_LEN;
+            let max = gen::max_value_for_num_bits(num_bits);
+            let modulus = u64::from(max) + 1;
+
+            [
+                ("zeros", vec![0u32; block_len]),
+                ("max_value", vec![max; block_len]),
+                (
+                    "random",
+                    // Deterministic xorshift32, not proptest — this fixed-pattern matrix
+                    // stays reproducible without a proptest runner; true randomized coverage
+                    // comes from `equivalence_matrix_random` below.
+                    {
+                        let mut state =
+                            0x2545_F491u32 ^ u32::from(num_bits).wrapping_mul(0x9E37_79B9);
+                        (0..block_len)
+                            .map(|_| {
+                                state ^= state << 13;
+                                state ^= state >> 17;
+                                state ^= state << 5;
+                                state & max
+                            })
+                            .collect()
+                    },
+                ),
+                (
+                    "sorted_ascending",
+                    (0..block_len as u32)
+                        .map(|i| (u64::from(i) % modulus) as u32)
+                        .collect(),
+                ),
+                (
+                    "alternating_min_max",
+                    (0..block_len)
+                        .map(|i| if i % 2 == 0 { 0 } else { max })
+                        .collect(),
+                ),
+            ]
+        }
+
+        fn assert_wasm128_matches_scalar(num_bits: u8, values: &[u32], label: &str) {
+            let block_len = Scalar::BLOCK_LEN;
+            let mut compressed = vec![0u8; block_len * 4 + 8];
+            let written = Scalar::compress(values, &mut compressed, num_bits);
+            let compressed = &compressed[..written];
+
+            let mut scalar_out = vec![0u32; block_len];
+            Scalar::decompress(compressed, &mut scalar_out, num_bits);
+
+            let mut wasm_out = vec![0u32; block_len];
+            Wasm128::decompress(compressed, &mut wasm_out, num_bits);
+
+            assert_eq!(
+                wasm_out, scalar_out,
+                "Wasm128::decompress mismatched Scalar::decompress at num_bits={num_bits}, \
+                 pattern={label}"
+            );
+        }
+
+        #[test]
+        #[allow(clippy::cast_possible_truncation)] // `i % modulus < 2^32` always, by construction
+        fn equivalence_matrix_fixed_patterns() {
+            for num_bits in 1u8..=32 {
+                for (label, values) in patterns(num_bits) {
+                    assert_wasm128_matches_scalar(num_bits, &values, label);
+                }
+            }
+        }
+
+        proptest! {
+            #![proptest_config(gen::proptest_config(200))]
+
+            #[test]
+            fn equivalence_matrix_random(
+                (num_bits, values) in gen::num_bits_and_block_values(Scalar::BLOCK_LEN)
+            ) {
+                assert_wasm128_matches_scalar(num_bits, &values, "proptest_random");
+            }
         }
     }
 }

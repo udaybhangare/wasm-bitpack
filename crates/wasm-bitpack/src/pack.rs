@@ -8,8 +8,9 @@
 
 use crate::scalar::{bitpack_into, check_num_bits, packed_len_bytes};
 use crate::traits::BitPacker;
-use crate::Scalar;
 
+#[cfg(not(all(target_arch = "wasm32", target_feature = "simd128")))]
+use crate::Scalar;
 #[cfg(all(target_arch = "wasm32", target_feature = "simd128"))]
 use crate::Wasm128;
 

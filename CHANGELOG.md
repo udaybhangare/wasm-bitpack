@@ -34,3 +34,22 @@ and this project adheres to [Cargo's semver conventions](https://doc.rust-lang.o
   Verified clean under `cargo +nightly miri test`, with property-test file-based failure
   persistence disabled and case counts scaled down under `cfg(miri)` (miri has no
   filesystem/cwd access by default, and is orders of magnitude slower than native).
+- Phase 2: the hand-written `wasm32` + `simd128` SIMD decode fast path. `wasm128/decode_macros.rs`
+  macro-generates all 32 per-bit-width `decode_{n}bit` routines from one template — each
+  decodes a pair of values at a time with a 2-lane `i64x2` register, using
+  `v128_load64_zero`/`v128_load64_lane` to read an 8-byte window per value from a local
+  zero-padded stack buffer, `i64x2_mul` by a per-lane power-of-two multiplier to emulate a
+  per-lane variable left shift (`core::arch::wasm32` has no such instruction), a uniform
+  `u64x2_shr`, and a defensive `v128_and` mask. `Wasm128::decompress` is now real and
+  byte-for-byte equivalent to `Scalar::decompress` by construction (proved by a new
+  Scalar-vs-Wasm128 equivalence matrix: every bit-width 1..=32 × {zeros, max-value, random,
+  sorted, alternating} patterns, plus a proptest sweep, run genuinely under `wasmtime` via
+  `cargo test --target wasm32-wasip1`). `Wasm128::num_bits`/`compress` delegate to `Scalar`
+  (encode stays scalar-only in v0.1; delegating rather than panicking keeps `pack()`
+  functional on `wasm32` + `simd128`, where it picks `Wasm128` as its full-block codec).
+  `best_available()` now genuinely resolves to `Wasm128` on that target. Added
+  `-C target-feature=+simd128` to `.cargo/config.toml`'s `rustflags` for
+  `wasm32-unknown-unknown`/`wasm32-wasip1` so the `simd128`-gated code path actually compiles
+  under the plain `cargo build --target wasm32-unknown-unknown`/`cargo test --target
+  wasm32-wasip1` invocations, instead of silently staying dead code. `cargo +nightly miri
+  test` remains clean (`wasm128/` stays `cfg`'d out on miri's host target, by design).

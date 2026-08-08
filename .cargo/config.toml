@@ -1,5 +1,9 @@
 [alias]
 xtask = "run --package xtask --"
 
+[target.wasm32-unknown-unknown]
+rustflags = ["-C", "target-feature=+simd128"]
+
 [target.wasm32-wasip1]
+rustflags = ["-C", "target-feature=+simd128"]
 runner = "wasmtime run --wasm simd -S inherit-network=false --"
