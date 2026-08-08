@@ -15,3 +15,6 @@ and this project adheres to [Cargo's semver conventions](https://doc.rust-lang.o
   with `todo!()` bodies, `xtask ci` automation, `wasm32-wasip1` + `wasmtime` test runner,
   CI workflow, licensing, and contributor docs. No codec logic yet.
 - MSRV resolved and pinned: Rust 1.64.0 (see `plans/decisions/0008-msrv.md`).
+- `.gitattributes` forcing `eol=lf` on checkout, fixing `fmt (windows-latest)` in CI
+  (Windows runners otherwise convert the repo's LF endings to CRLF on checkout, which
+  fails `rustfmt`'s `newline_style = "Unix"` check).
