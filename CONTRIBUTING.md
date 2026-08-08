@@ -92,11 +92,6 @@ No formal CLA. An optional DCO-style sign-off (`git commit -s`) is encouraged bu
 required — the dual MIT/Apache-2.0 license already covers the permissive-contribution
 intent.
 
-## Code of Conduct
-
-This project follows the [Contributor Covenant](CODE_OF_CONDUCT.md). By participating,
-you're expected to uphold it.
-
 ## Issue and PR templates
 
 Opening an issue or PR on GitHub will offer you a template:

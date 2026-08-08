@@ -1,9 +1,10 @@
+# Local-only AI-tooling config — never pushed to GitHub, but still read locally.
+CLAUDE.md
+/.claude/
+
 # Planning docs are local-only working notes — never pushed to GitHub.
-# See CLAUDE.md and plans/decisions/0009-plans-dir-not-pushed.md.
+# See plans/decisions/0009-plans-dir-not-pushed.md.
 /plans/
 
-# Rust build output (Phase -1 will extend this with wasm/xtask-specific entries)
+# Rust build output
 /target/
-
-# Personal Claude Code overrides (machine-specific, not shared with the team)
-.claude/settings.local.json
