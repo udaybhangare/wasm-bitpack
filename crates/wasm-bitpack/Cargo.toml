@@ -1,0 +1,30 @@
+[package]
+name = "wasm-bitpack"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "SIMD-accelerated integer bit-packing with a real WebAssembly SIMD128 decode fast path"
+homepage = "https://github.com/udaybhangare/wasm-bitpack"
+documentation = "https://docs.rs/wasm-bitpack"
+readme = "../../README.md"
+keywords = ["simd", "wasm", "compression", "bitpacking", "webassembly"]
+categories = ["compression", "wasm"]
+
+[lib]
+name = "wasm_bitpack"
+
+[dependencies]
+
+[dev-dependencies]
+# default-features = false: proptest's default `fork`/`timeout` features pull in
+# `rusty-fork`/`wait-timeout`, which don't support wasm32 (no process-timeout primitive
+# there) and break `cargo test --target wasm32-wasip1`. Neither feature is used by this
+# crate's property tests.
+proptest = { version = "1", default-features = false, features = ["std"] }
+
+[package.metadata.docs.rs]
+targets = ["wasm32-unknown-unknown", "x86_64-unknown-linux-gnu"]
+all-features = true
