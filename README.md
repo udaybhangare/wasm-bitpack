@@ -5,16 +5,28 @@
 [![docs.rs](https://img.shields.io/badge/docs.rs-not%20yet%20published-lightgrey)](https://docs.rs/wasm-bitpack)
 [![license](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue)](#license)
 
-A SIMD-accelerated integer bit-packing library for Rust — with a real WebAssembly SIMD128
-decode fast path, which no existing crate in this space has.
+A SIMD-accelerated integer bit-packing library for Rust — with a real, hand-written
+WebAssembly SIMD128 decode fast path (`core::arch::wasm32`), which no existing crate in this
+space ships.
 
 ## The pitch
 
 Every popular Rust integer-compression crate (`bitpacking`, `stream-vbyte`, `FastPFOR-rs`)
-gets its speed from x86 AVX2/SSE intrinsics and silently falls back to plain scalar code
-when compiled to `wasm32` — this crate implements the missing WebAssembly SIMD128 decode
-fast path, so it wins the benchmark by default the moment either crate is used in a
-browser, a Cloudflare Worker, or any other `wasm32` target.
+gets its speed from x86 AVX2/SSE intrinsics, which don't compile in at all when the crate is
+built for `wasm32` — confirmed directly from `bitpacking`'s own source, not inferred from
+timing alone (see `BENCHMARKS.md`). This crate hand-writes its decode kernels directly
+against WebAssembly's own `v128` SIMD128 instruction set instead of leaving that path
+unaddressed.
+
+**Honest current status** (full reproducible numbers in `BENCHMARKS.md`): the hand-written
+`Wasm128` decoder is genuinely faster than this crate's own portable `Scalar` path in most
+cases, but does **not** yet beat `bitpacking::BitPacker4x`'s decode throughput on
+`wasm32`+`simd128` — LLVM's autovectorizer turns `bitpacking`'s plain-array scalar fallback
+into real `v128` code once `simd128` is enabled at compile time, and that autovectorized
+code is currently faster than this crate's hand-written kernel on the hardware it's been
+measured on. The original ≥3x throughput goal is **not met** as of the last measured run;
+closing that gap (wider SIMD lanes, fewer loads per decoded element) is the natural next
+iteration, not something papered over here.
 
 ## The problem
 
@@ -30,9 +42,10 @@ WebAssembly has had its own 128-bit SIMD instruction set (`v128`, exposed in Rus
 and `wasmtime` since 2021. This crate hand-writes the bit-unpacking kernels against it.
 
 Scoping honesty: this crate is **not** trying to beat `bitpacking` on native x86_64 — its
-AVX2 path will likely stay faster there, and that's fine. The claim is narrow and provable:
-*fastest bit-unpacking crate when compiled to `wasm32`*, benchmarked against the same
-crates running on the same target, with a public reproduction script.
+AVX2 path will likely stay faster there, and that's fine. The claim being tested is narrow
+and provable either way: *decode throughput on `wasm32`, benchmarked against the same
+crates running on the same target, with a public reproduction script* — see `BENCHMARKS.md`
+for where that claim currently stands.
 
 ## Who this is for
 
@@ -53,10 +66,19 @@ crates running on the same target, with a public reproduction script.
   engines, log readers, analytics dashboards decode far more often than they encode).
   Encode ships scalar-only initially.
 
+## Benchmarks
+
+See [`BENCHMARKS.md`](BENCHMARKS.md) for the full, reproducible numbers (`cargo xtask
+bench-all` regenerates it from scratch — that's the single command anyone, including a
+skeptical reviewer, runs to check the published numbers themselves).
+
 ## Project status
 
-Early scaffold stage — see `CHANGELOG.md` for what's landed so far. Not yet published to
-crates.io.
+Scalar reference codec, hand-written `wasm32`+`simd128` decode path, and the benchmark
+harness are all in place and passing their correctness suites — see `CHANGELOG.md` for
+what's landed so far. Not yet published to crates.io. The SIMD decode kernel doesn't yet
+beat its performance target (see Benchmarks above); encode, sorted/delta variants, and a
+crates.io release are still ahead.
 
 ## License
 

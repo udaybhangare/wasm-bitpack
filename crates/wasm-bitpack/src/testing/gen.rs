@@ -5,18 +5,13 @@
 
 use proptest::prelude::*;
 
+// Canonical home for this is `bench_gen` (kept dependency-free — see its module docs); reexported
+// here so existing `gen::max_value_for_num_bits` call sites don't need to change.
+pub(crate) use super::bench_gen::max_value_for_num_bits;
+
 /// A `num_bits` strategy, uniform over the full valid range `1..=32`.
 pub(crate) fn num_bits_strategy() -> impl Strategy<Value = u8> {
     1u8..=32
-}
-
-/// The largest value representable in `num_bits` bits.
-pub(crate) fn max_value_for_num_bits(num_bits: u8) -> u32 {
-    if num_bits == 32 {
-        u32::MAX
-    } else {
-        (1u32 << num_bits) - 1
-    }
 }
 
 /// A strategy for exactly `len` `u32` values, each bounded to fit in `num_bits` bits.

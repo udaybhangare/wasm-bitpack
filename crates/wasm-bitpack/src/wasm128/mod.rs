@@ -89,6 +89,7 @@ mod imp {
     #[cfg(test)]
     mod tests {
         use super::Wasm128;
+        use crate::testing::bench_gen;
         use crate::testing::gen;
         use crate::{BitPacker, Scalar};
         use proptest::prelude::*;
@@ -96,40 +97,28 @@ mod imp {
         /// Every bit-width's `# Panics`-documented boundary is `Self::BLOCK_LEN`, so every
         /// pattern here is exactly one block — the matrix compares `BitPacker::decompress`
         /// directly, not the arbitrary-length `pack`/`unpack` wrapper.
-        #[allow(clippy::cast_possible_truncation)] // `block_len` is always 128; `i % modulus`
-                                                   // is always < 2^32 since `modulus <=
-                                                   // 2^32`
+        ///
+        /// `random`/`sorted_ascending` reuse `testing::bench_gen`'s generators — the same
+        /// ones the benchmark harness draws from (`plans/05-benchmarking-strategy.md` §4) —
+        /// so a SIMD bug can never hide behind inputs the benchmark suite happens not to
+        /// exercise, or vice versa (`plans/04-testing-strategy.md` §9).
         fn patterns(num_bits: u8) -> [(&'static str, Vec<u32>); 5] {
             let block_len = Scalar::BLOCK_LEN;
             let max = gen::max_value_for_num_bits(num_bits);
-            let modulus = u64::from(max) + 1;
+            // Vary the seed per bit-width so different widths don't share one raw xorshift
+            // sequence before masking.
+            let seed = bench_gen::BENCH_SEED ^ u32::from(num_bits).wrapping_mul(0x9E37_79B9);
 
             [
                 ("zeros", vec![0u32; block_len]),
                 ("max_value", vec![max; block_len]),
                 (
                     "random",
-                    // Deterministic xorshift32, not proptest — this fixed-pattern matrix
-                    // stays reproducible without a proptest runner; true randomized coverage
-                    // comes from `equivalence_matrix_random` below.
-                    {
-                        let mut state =
-                            0x2545_F491u32 ^ u32::from(num_bits).wrapping_mul(0x9E37_79B9);
-                        (0..block_len)
-                            .map(|_| {
-                                state ^= state << 13;
-                                state ^= state >> 17;
-                                state ^= state << 5;
-                                state & max
-                            })
-                            .collect()
-                    },
+                    bench_gen::random_values(seed, num_bits, block_len),
                 ),
                 (
                     "sorted_ascending",
-                    (0..block_len as u32)
-                        .map(|i| (u64::from(i) % modulus) as u32)
-                        .collect(),
+                    bench_gen::sorted_ascending_values(num_bits, block_len),
                 ),
                 (
                     "alternating_min_max",

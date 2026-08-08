@@ -53,3 +53,38 @@ and this project adheres to [Cargo's semver conventions](https://doc.rust-lang.o
   under the plain `cargo build --target wasm32-unknown-unknown`/`cargo test --target
   wasm32-wasip1` invocations, instead of silently staying dead code. `cargo +nightly miri
   test` remains clean (`wasm128/` stays `cfg`'d out on miri's host target, by design).
+- Phase 3: the benchmark harness and the project's first real, reproducible throughput
+  measurement. `cargo xtask bench-all` runs a native `criterion` sanity baseline
+  (`benches/decode_native.rs`; `Wasm128` doesn't exist on that target, so this only compares
+  `Scalar`/`bitpacking`/`stream-vbyte`) and the real comparison — four standalone
+  `Instant`-based timing binaries (`benches/wasm/*.rs`) cross-compiled to `wasm32-wasip1` and
+  run under `wasmtime`, covering 9 bit-widths × 3 patterns (random/sorted/delta-friendly) × 4
+  log-scaled sizes (128 to 10,000,000 elements) × 4 competitors, 100 timed iterations per
+  point — then writes a dated snapshot to `plans/results/` and regenerates the root
+  `BENCHMARKS.md`. Added `testing/bench_gen.rs`, a dependency-free generator module (fixed
+  seed `0x2545_F491`) shared by the equivalence matrix and the benches, exposed to
+  `benches/` targets through a new `bench-support` Cargo feature (`#[doc(hidden)]`, off by
+  default, not part of the locked v0.1 public API — see its doc comment for why it's safe to
+  gate a dev-only feature behind something that needs `dev-dependencies`).
+  **Result: the ≥3x decode-throughput claim (`plans/00-overview.md` §6) is not met.**
+  Measured at steady state (10,000,000 elements, both `wasm-bitpack` and `bitpacking`
+  compiled with the identical `+simd128` `RUSTFLAGS`): `Wasm128` beats this crate's own
+  `Scalar` path in almost every case (up to ~16x at wide bit-widths), but trails
+  `bitpacking::BitPacker4x`'s LLVM-autovectorized `simd128` fallback — median ratio 0.41x
+  (two independent runs: 0.50x and 0.41x, range 0.17x-1.18x combined) across the full
+  bit-width × pattern matrix, never approaching 1x let alone 3x — see `BENCHMARKS.md` for
+  the exact numbers and full methodology, including the two-run reproducibility comparison
+  (qualitative finding reproduces cleanly; absolute numbers vary up to ~45% run-to-run on
+  this non-isolated dev machine, reported honestly rather than smoothed over). This confirms
+  the risk Phase 0 flagged in advance (`plans/results/phase0-premise-validation.md` §6): the
+  real bar on `wasm32` turned out to be an already-near-native autovectorized baseline, not
+  scalar code, and the current 2-values-per-`i64x2`-lane decode kernel doesn't clear it.
+  Reported honestly per `plans/05-benchmarking-strategy.md` §6's hard rule rather than
+  adjusting methodology to manufacture a passing number; closing the gap (wider SIMD lanes,
+  fewer loads per decoded element) is left as a follow-up, not retrofitted into this phase.
+  Also added a minimal,
+  unpolished `wasm-bindgen` browser demo (`demo/browser/`, a standalone scratch crate outside
+  the main workspace) that reproduces the `Scalar`-vs-`Wasm128` comparison live in a browser
+  tab with `performance.now()`, and `.github/workflows/benchmarks.yml` (informational,
+  `main`-push-only, uploads the dated snapshot as a workflow artifact since `plans/` itself
+  is git-ignored).

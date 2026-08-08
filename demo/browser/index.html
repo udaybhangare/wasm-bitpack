@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>wasm-bitpack — browser demo</title>
+<style>
+  body { font-family: system-ui, sans-serif; max-width: 40rem; margin: 2rem auto; padding: 0 1rem; }
+  button { font-size: 1rem; padding: 0.5rem 1rem; }
+  table { border-collapse: collapse; margin-top: 1rem; }
+  td, th { border: 1px solid #ccc; padding: 0.4rem 0.8rem; text-align: right; }
+  th { text-align: left; }
+  #status { color: #666; }
+  .ok { color: #060; }
+  .bad { color: #c00; font-weight: bold; }
+</style>
+</head>
+<body>
+<h1>wasm-bitpack — browser decode demo</h1>
+<p>
+  Proof artifact for <code>plans/05-benchmarking-strategy.md</code> §1 row 3 — a real, live
+  comparison of this crate's <code>Scalar</code> vs. hand-written <code>Wasm128</code>
+  (SIMD128) decode path, running in <em>this</em> browser tab, timed with
+  <code>performance.now()</code>. Not the headline numeric claim (that's
+  <code>cargo xtask bench-wasm</code> under <code>wasmtime</code> — see
+  <code>BENCHMARKS.md</code>); this is a visual sanity check anyone can reproduce by opening
+  this page. No UI polish intended.
+</p>
+
+<label>Bit width (1-32): <input id="numBits" type="number" min="1" max="32" value="16" /></label><br />
+<label>Blocks (×128 elements): <input id="blockCount" type="number" min="1" value="20000" /></label><br />
+<label>Timed iterations: <input id="iterations" type="number" min="1" value="50" /></label><br />
+<button id="run">Run comparison</button>
+<p id="status"></p>
+<table id="results" hidden>
+  <thead><tr><th>Path</th><th>Total ms</th><th>ms/iteration</th><th>M elements/s</th></tr></thead>
+  <tbody></tbody>
+</table>
+
+<script type="module">
+  import init, { generate_and_pack, decode_scalar, decode_wasm128 } from "./pkg/wasm_bitpack_browser_demo.js";
+
+  const statusEl = document.getElementById("status");
+  const table = document.getElementById("results");
+  const tbody = table.querySelector("tbody");
+
+  async function main() {
+    statusEl.textContent = "loading wasm module...";
+    await init();
+    statusEl.textContent = "ready.";
+    document.getElementById("run").disabled = false;
+  }
+
+  function timeCalls(fn, iterations) {
+    // warmup
+    let last;
+    for (let i = 0; i < Math.min(5, iterations); i++) last = fn();
+    const t0 = performance.now();
+    for (let i = 0; i < iterations; i++) last = fn();
+    const t1 = performance.now();
+    return { totalMs: t1 - t0, checksum: last };
+  }
+
+  document.getElementById("run").addEventListener("click", () => {
+    const numBits = Number(document.getElementById("numBits").value);
+    const blockCount = Number(document.getElementById("blockCount").value);
+    const iterations = Number(document.getElementById("iterations").value);
+    const elements = blockCount * 128;
+
+    statusEl.textContent = "packing input...";
+    const compressed = generate_and_pack(numBits, blockCount);
+
+    statusEl.textContent = "timing Scalar::decompress...";
+    const scalar = timeCalls(() => decode_scalar(compressed, blockCount, numBits), iterations);
+
+    statusEl.textContent = "timing Wasm128::decompress...";
+    let wasm128;
+    let wasm128Error = null;
+    try {
+      wasm128 = timeCalls(() => decode_wasm128(compressed, blockCount, numBits), iterations);
+    } catch (err) {
+      wasm128Error = err;
+    }
+
+    tbody.innerHTML = "";
+    const addRow = (label, result) => {
+      const msPerIter = result.totalMs / iterations;
+      const mElementsPerSec = (elements / (msPerIter / 1000)) / 1e6;
+      const tr = document.createElement("tr");
+      tr.innerHTML = `<td>${label}</td><td>${result.totalMs.toFixed(2)}</td>` +
+        `<td>${msPerIter.toFixed(4)}</td><td>${mElementsPerSec.toFixed(1)}</td>`;
+      tbody.appendChild(tr);
+    };
+    addRow("Scalar", scalar);
+    if (wasm128Error) {
+      const tr = document.createElement("tr");
+      tr.innerHTML = `<td>Wasm128</td><td colspan="3" class="bad">unavailable: ${wasm128Error}</td>`;
+      tbody.appendChild(tr);
+    } else {
+      addRow("Wasm128 (SIMD128)", wasm128);
+    }
+    table.hidden = false;
+
+    if (!wasm128Error) {
+      const match = scalar.checksum === wasm128.checksum;
+      const speedup = (scalar.totalMs / wasm128.totalMs).toFixed(2);
+      statusEl.innerHTML = match
+        ? `<span class="ok">checksums match (${scalar.checksum >>> 0}) — Wasm128 is ${speedup}x Scalar in this run.</span>`
+        : `<span class="bad">checksum mismatch! Scalar=${scalar.checksum >>> 0} Wasm128=${wasm128.checksum >>> 0}</span>`;
+    } else {
+      statusEl.textContent = "Wasm128 unavailable on this build/browser (see console).";
+    }
+  });
+
+  document.getElementById("run").disabled = true;
+  main();
+</script>
+</body>
+</html>

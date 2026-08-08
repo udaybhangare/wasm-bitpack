@@ -19,12 +19,10 @@
 mod dispatch;
 mod pack;
 mod scalar;
+mod testing;
 mod traits;
 mod unpack;
 mod wasm128;
-
-#[cfg(test)]
-mod testing;
 
 pub use dispatch::best_available;
 pub use pack::pack;
@@ -32,6 +30,22 @@ pub use scalar::Scalar;
 pub use traits::BitPacker;
 pub use unpack::unpack;
 pub use wasm128::Wasm128;
+
+/// Benchmark input generation, mirroring exactly what the correctness suite proves against —
+/// see `plans/04-testing-strategy.md` §9. **Not part of the locked v0.1 public API**
+/// (`plans/02-api-design-rules.md` §2) and not covered by semver: this exists solely so this
+/// crate's own `benches/` targets (a separate compilation unit that can only see `pub` items)
+/// can reuse the exact generation logic the correctness suite is checked against, instead of
+/// a second, potentially-drifting copy. Gated behind the `bench-support` feature, which is
+/// off by default and is not meant to be enabled outside this crate's own benchmark targets.
+#[cfg(feature = "bench-support")]
+#[doc(hidden)]
+pub mod bench_support {
+    pub use crate::testing::bench_gen::{
+        max_value_for_num_bits, random_values, sorted_ascending_values, BenchPattern,
+        BENCH_BIT_WIDTHS, BENCH_SEED, BENCH_SIZES,
+    };
+}
 
 #[cfg(test)]
 mod scaffold_smoke_test {

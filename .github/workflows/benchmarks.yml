@@ -1,0 +1,44 @@
+name: Benchmarks
+
+# Informational only — never a required check (bench numbers are noisy on shared CI
+# runners; treating them as a hard gate would produce false-negative failures unrelated to
+# actual regressions). Runs on `main`-branch pushes only, not every PR, to control CI
+# minutes — see plans/05-benchmarking-strategy.md §8 and plans/07-ci-cd.md §3.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  benches:
+    name: benches (informational)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown,wasm32-wasip1
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: benchmarks
+      - uses: bytecodealliance/actions/wasmtime/setup@v1
+      - run: cargo xtask bench-all
+      # `plans/` is git-ignored (local-only working notes, see
+      # plans/decisions/0009-plans-dir-not-pushed.md) so the dated snapshot `bench-all`
+      # writes there never reaches the repo — upload it as a workflow artifact instead,
+      # exactly the "informational, manual trend review" treatment
+      # plans/05-benchmarking-strategy.md §8 / plans/07-ci-cd.md §4 call for.
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: benchmark-results-${{ github.sha }}
+          path: |
+            plans/results/*.md
+            plans/results/*.raw.json
+            BENCHMARKS.md
+          if-no-files-found: warn
+          retention-days: 90

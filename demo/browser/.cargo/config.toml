@@ -1,0 +1,5 @@
+# `Wasm128`'s `BitPacker` impl is `cfg`-gated to `target_feature = "simd128"` (see
+# `crates/wasm-bitpack/src/wasm128/mod.rs`) — without this, `decode_wasm128` below wouldn't
+# compile at all for this demo. Mirrors the root repo's own `.cargo/config.toml`.
+[target.wasm32-unknown-unknown]
+rustflags = ["-C", "target-feature=+simd128"]

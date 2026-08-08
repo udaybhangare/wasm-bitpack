@@ -40,7 +40,11 @@ jobs:
           components: clippy
           targets: wasm32-unknown-unknown,wasm32-wasip1
       - uses: Swatinem/rust-cache@v2
-      - run: cargo clippy --workspace --all-targets -- -D warnings
+      # --features bench-support: --all-targets pulls in the benches/ targets (Phase 3),
+      # which need this internal, off-by-default feature to see bench_support (see its doc
+      # comment in src/lib.rs) — plain `cargo clippy --workspace --all-targets` fails to
+      # even compile them otherwise.
+      - run: cargo clippy --workspace --all-targets --features bench-support -- -D warnings
 
   test-stable:
     name: test-stable (${{ matrix.os }})

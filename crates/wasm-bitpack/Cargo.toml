@@ -13,17 +13,68 @@ readme = "../../README.md"
 keywords = ["simd", "wasm", "compression", "bitpacking", "webassembly"]
 categories = ["compression", "wasm"]
 
+# Full manual control over bench targets — see `plans/05-benchmarking-strategy.md` §1-3:
+# `decode_native` is the native criterion baseline; the `wasm_*` targets are standalone
+# `Instant`-based timing binaries meant to be cross-compiled to `wasm32-wasip1` and invoked
+# directly under `wasmtime` by `cargo xtask bench-wasm` (criterion has no clean wasm32
+# story). Both kinds need `[[bench]]` (not `[[bin]]`/`src/bin`) specifically because only
+# `test`/`example`/`bench` targets receive `dev-dependencies` — `bitpacking`/`stream-vbyte`
+# are dev-only, so a plain `[[bin]]` target could not see them.
+autobenches = false
+
 [lib]
 name = "wasm_bitpack"
+bench = false
+
+[[bench]]
+name = "decode_native"
+path = "benches/decode_native.rs"
+harness = false
+
+[[bench]]
+name = "wasm_scalar"
+path = "benches/wasm/scalar.rs"
+harness = false
+
+[[bench]]
+name = "wasm_wasm128"
+path = "benches/wasm/wasm128.rs"
+harness = false
+
+[[bench]]
+name = "wasm_bitpacking"
+path = "benches/wasm/bitpacking_competitor.rs"
+harness = false
+
+[[bench]]
+name = "wasm_streamvbyte"
+path = "benches/wasm/streamvbyte_competitor.rs"
+harness = false
+
+[features]
+# Internal-only: re-exports this crate's own deterministic benchmark-input generators (see
+# `src/testing/bench_gen.rs`) so `benches/` targets can reuse them instead of a second,
+# potentially-drifting copy. Not part of the locked v0.1 public API, not covered by semver,
+# `#[doc(hidden)]`. Do not enable outside this crate's own benchmark targets.
+bench-support = []
 
 [dependencies]
 
 [dev-dependencies]
+bitpacking = "0.9"
+# default-features = false, dropping `rayon`: cargo resolves every `[dev-dependencies]` entry
+# for the whole package as soon as any one bench/test target is built, regardless of which
+# specific target was requested — so `criterion`'s default `rayon` feature, which refuses to
+# compile at all for `wasm32` (`compile_error!("Rayon cannot be used when targeting
+# wasi32...")`), would break building even the `wasm_*` targets that never `use criterion`.
+# `cargo_bench_support`/`plotters` (native-only `decode_native.rs` needs both) stay enabled.
+criterion = { version = "0.5", default-features = false, features = ["cargo_bench_support", "plotters"] }
 # default-features = false: proptest's default `fork`/`timeout` features pull in
 # `rusty-fork`/`wait-timeout`, which don't support wasm32 (no process-timeout primitive
 # there) and break `cargo test --target wasm32-wasip1`. Neither feature is used by this
 # crate's property tests.
 proptest = { version = "1", default-features = false, features = ["std"] }
+stream-vbyte = "0.4"
 
 [package.metadata.docs.rs]
 targets = ["wasm32-unknown-unknown", "x86_64-unknown-linux-gnu"]

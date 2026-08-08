@@ -1,0 +1,23 @@
+# Standalone scratch crate — deliberately NOT a member of the root workspace (same pattern
+# Phase 0's premise-validation spike used for its own scratch crate). This is a minimal
+# `wasm-bindgen` binding for the browser demo page (`index.html`), a proof artifact per
+# `plans/05-benchmarking-strategy.md` §1 row 3 — not the general-purpose JS wrapper package
+# reserved (and explicitly NOT designed) for a future phase at `crates/wasm-bitpack-js/`, see
+# `plans/01-architecture.md` §1. Not published, not CI-gated, no UI polish.
+[workspace]
+
+[package]
+name = "wasm-bitpack-browser-demo"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+wasm-bindgen = "0.2"
+wasm-bitpack = { path = "../../crates/wasm-bitpack" }
+
+[profile.release]
+opt-level = 3
