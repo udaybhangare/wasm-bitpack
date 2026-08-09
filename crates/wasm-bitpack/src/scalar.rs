@@ -72,8 +72,12 @@ impl BitPacker for Scalar {
 }
 
 /// The minimum number of bits needed to represent `max` (`0` for `max == 0`).
+///
+/// `pub(crate)` (not private) so [`crate::sorted`]'s `num_bits_sorted`/
+/// `num_bits_strictly_sorted` can reuse it for their own max-delta-to-bit-width conversion,
+/// instead of a second copy of the same `leading_zeros` trick.
 #[allow(clippy::cast_possible_truncation)] // `32 - leading_zeros()` is always in 0..=32
-fn bits_for_max_value(max: u32) -> u8 {
+pub(crate) fn bits_for_max_value(max: u32) -> u8 {
     (32 - max.leading_zeros()) as u8
 }
 

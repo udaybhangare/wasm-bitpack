@@ -17,7 +17,9 @@ use stream_vbyte::decode::decode;
 use stream_vbyte::encode::encode;
 use stream_vbyte::scalar::Scalar as StreamVByteScalar;
 use wasm_bitpack::bench_support::{BenchPattern, BENCH_BIT_WIDTHS, BENCH_SEED};
-use wasm_bitpack::{BitPacker, Scalar};
+use wasm_bitpack::{
+    compress_sorted, decompress_sorted, num_bits_sorted, pack, unpack, BitPacker, Scalar,
+};
 
 /// `wasm_bitpack::Scalar` vs `bitpacking::BitPacker4x` — both fixed-128-block bit-packing,
 /// directly comparable bit-width for bit-width.
@@ -87,6 +89,67 @@ fn bench_stream_vbyte(c: &mut Criterion) {
     group.finish();
 }
 
+/// Phase 4's delta-encoded variant, decode side: `decompress_sorted` vs. plain `unpack` on
+/// the *same* logical values — a synthetic "large timestamps, small steps" sequence
+/// (deterministic, no RNG needed), the realistic case `plans/05-benchmarking-strategy.md`
+/// §4's `delta_friendly`/`sorted_ascending` patterns exist for and the one
+/// `crates/wasm-bitpack/src/sorted.rs`'s module docs describe: `Scalar::num_bits` alone must
+/// cover the full magnitude of the absolute values (here, ~31 bits), while
+/// `num_bits_sorted` only has to cover the step sizes between them (here, 4 bits) — smaller
+/// packed input, same decode kernel underneath (`decompress_sorted` delegates to `unpack`
+/// for the delta-unpacking step, see the module docs). Native sanity check only, per this
+/// file's module doc — not the headline wasm32 claim.
+fn bench_sorted_decode(c: &mut Criterion) {
+    let mut group = c.benchmark_group("decode_native_sorted");
+    let len = 10 * Scalar::BLOCK_LEN;
+
+    // Unix-timestamp-scale base, deterministic small steps (always in 2..=14, never
+    // wrapping) — unlike `BenchPattern::SortedAscending`, which wraps at the bit-width's
+    // max value and would violate `compress_sorted`'s non-decreasing precondition here.
+    const BASE: u32 = 1_700_000_000;
+    let values: Vec<u32> = (0..len as u32).map(|i| BASE + i * 8 + (i % 7)).collect();
+
+    let plain_num_bits = Scalar::num_bits(&values);
+    let sorted_num_bits = num_bits_sorted(&values);
+    println!(
+        "decode_native_sorted: len={len} plain_num_bits={plain_num_bits} \
+         sorted_num_bits={sorted_num_bits}"
+    );
+
+    let mut plain_compressed = vec![0u8; len * 4 + 8];
+    let plain_written = pack(&values, &mut plain_compressed, plain_num_bits);
+    let plain_compressed = &plain_compressed[..plain_written];
+    let mut plain_out = vec![0u32; len];
+
+    let mut sorted_compressed = vec![0u8; len * 4 + 8];
+    let sorted_written = compress_sorted(&values, &mut sorted_compressed, sorted_num_bits);
+    let sorted_compressed = &sorted_compressed[..sorted_written];
+    let mut sorted_out = vec![0u32; len];
+
+    group.throughput(Throughput::Elements(len as u64));
+    group.bench_function("plain_unpack", |b| {
+        b.iter(|| {
+            unpack(
+                black_box(plain_compressed),
+                black_box(&mut plain_out),
+                plain_num_bits,
+            );
+            black_box(&plain_out);
+        });
+    });
+    group.bench_function("decompress_sorted", |b| {
+        b.iter(|| {
+            decompress_sorted(
+                black_box(sorted_compressed),
+                black_box(&mut sorted_out),
+                sorted_num_bits,
+            );
+            black_box(&sorted_out);
+        });
+    });
+    group.finish();
+}
+
 criterion_group! {
     name = benches;
     // Shorter than criterion's defaults (sample_size 100, measurement_time 5s): this bench
@@ -98,6 +161,6 @@ criterion_group! {
         .sample_size(10)
         .measurement_time(std::time::Duration::from_millis(500))
         .warm_up_time(std::time::Duration::from_millis(300));
-    targets = bench_fixed_width_decode, bench_stream_vbyte
+    targets = bench_fixed_width_decode, bench_stream_vbyte, bench_sorted_decode
 }
 criterion_main!(benches);

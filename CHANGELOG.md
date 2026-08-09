@@ -88,3 +88,29 @@ and this project adheres to [Cargo's semver conventions](https://doc.rust-lang.o
   tab with `performance.now()`, and `.github/workflows/benchmarks.yml` (informational,
   `main`-push-only, uploads the dated snapshot as a workflow artifact since `plans/` itself
   is git-ignored).
+- Phase 4: `compress_sorted`/`compress_strictly_sorted` and their `decompress_sorted`/
+  `decompress_strictly_sorted` counterparts (new `src/sorted.rs`) — a delta-encoded
+  convenience layer for monotonic sequences (sorted IDs, timestamps). Wire format: the first
+  value is written as a raw 4-byte little-endian header and only `values[1..]` is
+  delta-encoded and packed, deliberately, so a sequence of large absolute values with small
+  steps between them (e.g. Unix timestamps) doesn't force `num_bits` up to the first value's
+  own magnitude — `num_bits_sorted`/`num_bits_strictly_sorted` size only against genuine step
+  widths. `compress_sorted` subtracts consecutive differences (duplicates allowed);
+  `compress_strictly_sorted` additionally subtracts `1` per step (no duplicates), so a run of
+  consecutive integers packs to `0` bits. Encode delta-encodes into fixed `128`-element stack
+  buffers (no heap allocation) and delegates each chunk to `pack` — stays scalar-only, same
+  non-goal as plain `compress`/`pack` (no SIMD encode path in v0.1 for any variant). Decode's
+  key reuse: `decompress_sorted`/`decompress_strictly_sorted` delegate to `unpack` for the
+  delta-unpacking step, which transparently runs the existing `Wasm128` SIMD decode fast path
+  on `wasm32` + `simd128` unmodified (a delta value unpacks exactly like any other
+  fixed-width `u32`) — only the final prefix-sum reconstruction is scalar, since it's an
+  inherently sequential dependency chain. Covered by a round-trip proptest suite (new
+  sorted/strictly-sorted generators in `testing/gen.rs`, bounded so generated test sequences
+  can never overflow `u32` regardless of how wide a bit-width gets drawn) across bit-widths
+  1..=32, full unit/boundary/panic coverage, and doctests; verified clean under `cargo
+  +nightly miri test` and `cargo test --target wasm32-wasip1` (existing Phase 1/2 equivalence
+  tests unaffected — no changes to the plain `BitPacker` trait surface). Added a native
+  `decode_native_sorted` criterion bench group (`benches/decode_native.rs`) comparing
+  `decompress_sorted` against plain `unpack` on a synthetic large-timestamp/small-step
+  sequence, demonstrating the effective-bit-width win this module exists for (31 bits down to
+  4, in that bench's fixed example).

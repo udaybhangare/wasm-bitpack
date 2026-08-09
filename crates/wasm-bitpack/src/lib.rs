@@ -19,6 +19,7 @@
 mod dispatch;
 mod pack;
 mod scalar;
+mod sorted;
 mod testing;
 mod traits;
 mod unpack;
@@ -27,6 +28,10 @@ mod wasm128;
 pub use dispatch::best_available;
 pub use pack::pack;
 pub use scalar::Scalar;
+pub use sorted::{
+    compress_sorted, compress_strictly_sorted, decompress_sorted, decompress_strictly_sorted,
+    num_bits_sorted, num_bits_strictly_sorted,
+};
 pub use traits::BitPacker;
 pub use unpack::unpack;
 pub use wasm128::Wasm128;
