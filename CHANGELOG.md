@@ -8,6 +8,8 @@ and this project adheres to [Cargo's semver conventions](https://doc.rust-lang.o
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-08-15
+
 ### Added
 
 - Initial workspace scaffold: Cargo workspace (`crates/wasm-bitpack`, `xtask`), crate
@@ -164,3 +166,28 @@ and this project adheres to [Cargo's semver conventions](https://doc.rust-lang.o
   closing the remaining gap (e.g. full compile-time unrolling of all 32 rows, mirroring
   `bitpacking`'s own `crunchy::unroll!`, or `wasm-opt` post-processing) is left as a
   separately-scoped follow-up, not retrofitted into this phase.
+- Phase 5: polish and first release. Added `no_std` support — a new `std` feature (on by
+  default), `#![cfg_attr(not(any(feature = "std", test)), no_std)]` in `lib.rs`, and
+  `testing/bench_gen.rs` (previously compiled unconditionally, returning `Vec<u32>` from
+  every `pub` function) now gated behind `cfg(any(test, feature = "bench-support"))`, closing
+  the one real gap that would otherwise have broken a genuine `no_std` build; the rest of the
+  crate already had zero `std` dependencies in its production code paths. Added a `no-std` CI
+  job (ubuntu + windows) building and testing `--no-default-features`. Added the missing
+  `# Examples` doctests on every public item that lacked one (`num_bits_sorted`,
+  `num_bits_strictly_sorted`, `decompress_sorted`, `decompress_strictly_sorted`, the
+  `BitPacker` trait itself, `best_available`, and `Wasm128` — the last via an `ignore`d,
+  target-gated example plus a `#[cfg_attr(docsrs, doc(cfg(...)))]` availability badge, since
+  its `BitPacker` impl only exists under `wasm32` + `simd128` and can't run as a normal host
+  doctest). Added `.github/workflows/release.yml`: tag-triggered (`v*.*.*`), verifies the tag
+  matches `Cargo.toml`'s resolved version before doing anything else, re-runs the full CI
+  matrix, then publishes via `CARGO_REGISTRY_TOKEN` and creates a GitHub Release from the
+  matching `CHANGELOG.md` section. Token-based publishing (not OIDC trusted publishing) is
+  correct for this first release — crates.io trusted publishing can only be configured
+  against a crate that already exists on the registry.
+  **The JS/TS wrapper (`crates/wasm-bitpack-js/`) was explicitly skipped in this phase** —
+  always reserved as an optional Phase 5 stretch goal (`plans/01-architecture.md` §1, §8),
+  not committed scope; noted here explicitly rather than silently dropped.
+  **The ≥3x decode-throughput claim remains unmet** (median 0.62x-0.66x vs. `bitpacking`,
+  carried forward from the Phase 4b measurement above) — this phase was polish-and-release
+  only, per its own explicit exclusion of new codec functionality; closing the gap remains a
+  separately-scoped follow-up.

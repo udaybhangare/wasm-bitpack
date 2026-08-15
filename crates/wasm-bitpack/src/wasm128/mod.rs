@@ -17,6 +17,26 @@ mod decode_macros;
 ///
 /// Only actually constructible/useful when compiled for `wasm32` with the `simd128`
 /// target feature enabled.
+///
+/// # Examples
+///
+/// ```ignore
+/// // Only compiles when targeting wasm32 with simd128 enabled (e.g. under
+/// // `cargo test --target wasm32-wasip1`) — ignored on the default doctest run since
+/// // `impl BitPacker for Wasm128` doesn't exist off-target.
+/// use wasm_bitpack::{BitPacker, Wasm128};
+///
+/// let values = vec![7u32; Wasm128::BLOCK_LEN];
+/// let num_bits = Wasm128::num_bits(&values);
+///
+/// let mut compressed = vec![0u8; Wasm128::BLOCK_LEN * num_bits as usize / 8];
+/// let written = Wasm128::compress(&values, &mut compressed, num_bits);
+///
+/// let mut decompressed = vec![0u32; Wasm128::BLOCK_LEN];
+/// let read = Wasm128::decompress(&compressed[..written], &mut decompressed, num_bits);
+/// assert_eq!(read, written);
+/// assert_eq!(decompressed, values);
+/// ```
 pub struct Wasm128;
 
 #[cfg(all(target_arch = "wasm32", target_feature = "simd128"))]
@@ -26,6 +46,10 @@ mod imp {
     use crate::traits::BitPacker;
     use crate::Scalar;
 
+    #[cfg_attr(
+        docsrs,
+        doc(cfg(all(target_arch = "wasm32", target_feature = "simd128")))
+    )]
     impl BitPacker for Wasm128 {
         const BLOCK_LEN: usize = 128;
 

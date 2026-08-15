@@ -1,0 +1,172 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  verify-tag-matches-version:
+    name: verify tag == Cargo.toml version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Compare tag to workspace.package.version
+        shell: bash
+        run: |
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          CARGO_VERSION="$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "wasm-bitpack") | .version')"
+          echo "tag=$TAG_VERSION cargo=$CARGO_VERSION"
+          if [ "$TAG_VERSION" != "$CARGO_VERSION" ]; then
+            echo "::error::Tag version ($TAG_VERSION) does not match Cargo.toml version ($CARGO_VERSION)"
+            exit 1
+          fi
+
+  # Re-runs the same checks as ci.yml (kept as its own explicit set of jobs here, matching
+  # this repo's preference for readable per-file workflows over a shared workflow_call) —
+  # never publish on the strength of a possibly-stale prior CI run against a different commit.
+  fmt:
+    needs: verify-tag-matches-version
+    name: fmt (${{ matrix.os }})
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --all -- --check
+
+  clippy:
+    needs: verify-tag-matches-version
+    name: clippy (${{ matrix.os }})
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+          targets: wasm32-unknown-unknown,wasm32-wasip1
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo clippy --workspace --all-targets --features bench-support -- -D warnings
+
+  test-stable:
+    needs: verify-tag-matches-version
+    name: test-stable (${{ matrix.os }})
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test --workspace
+
+  no-std:
+    needs: verify-tag-matches-version
+    name: no-std (${{ matrix.os }})
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: no-std
+      - run: cargo build --no-default-features -p wasm-bitpack
+      - run: cargo test --no-default-features -p wasm-bitpack
+
+  wasm32-build:
+    needs: verify-tag-matches-version
+    name: wasm32-build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: wasm32-build
+      - run: cargo build --target wasm32-unknown-unknown -p wasm-bitpack
+
+  wasm32-test-wasmtime:
+    needs: verify-tag-matches-version
+    name: wasm32-test-wasmtime
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-wasip1
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: wasm32-wasip1
+      - uses: bytecodealliance/actions/wasmtime/setup@v1
+      - run: cargo test --target wasm32-wasip1 -p wasm-bitpack
+
+  miri:
+    needs: verify-tag-matches-version
+    name: miri
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: miri
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: miri
+      - run: cargo +nightly miri test -p wasm-bitpack
+
+  publish:
+    name: publish to crates.io
+    needs: [fmt, clippy, test-stable, no-std, wasm32-build, wasm32-test-wasmtime, miri]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: cargo publish
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: cargo publish -p wasm-bitpack
+
+  github-release:
+    name: create GitHub release
+    needs: publish
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Extract matching CHANGELOG.md section
+        shell: bash
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          awk -v ver="## [$VERSION]" '
+            BEGIN { p = 0 }
+            index($0, "## [") == 1 {
+              if (index($0, ver) == 1) { p = 1; next }
+              else if (p) { exit }
+            }
+            p { print }
+          ' CHANGELOG.md > release-notes.md
+          cat release-notes.md
+      - uses: softprops/action-gh-release@v2
+        with:
+          body_path: release-notes.md
+          name: ${{ github.ref_name }}

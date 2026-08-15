@@ -72,6 +72,23 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo test --workspace
 
+  no-std:
+    name: no-std (${{ matrix.os }})
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: no-std
+      - name: build without default features (no_std production code path)
+        run: cargo build --no-default-features -p wasm-bitpack
+      - name: test without default features (production no_std + full test suite via cfg(test) std exemption)
+        run: cargo test --no-default-features -p wasm-bitpack
+
   wasm32-build:
     name: wasm32-build
     runs-on: ubuntu-latest

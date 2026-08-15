@@ -15,6 +15,13 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 #![allow(clippy::module_name_repetitions)]
 #![allow(clippy::must_use_candidate)]
+// `test` is exempted so `#[cfg(test)]` modules (which use `std`/`Vec` throughout) keep
+// compiling unmodified under `--no-default-features`; doctests are unaffected either way
+// since they're always compiled as a separate, ordinary std-linked crate.
+#![cfg_attr(not(any(feature = "std", test)), no_std)]
+// `doc_cfg` is nightly-only; docs.rs builds with a pinned nightly and passes `--cfg docsrs`
+// automatically, so this has no effect on a normal stable build.
+#![cfg_attr(docsrs, feature(doc_cfg))]
 
 mod dispatch;
 mod pack;

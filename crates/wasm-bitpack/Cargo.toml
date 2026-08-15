@@ -52,11 +52,22 @@ path = "benches/wasm/streamvbyte_competitor.rs"
 harness = false
 
 [features]
+default = ["std"]
+
+# Enables anything requiring `std`. Currently nothing in this crate's own public API needs
+# it (`pack`/`unpack` are buffer-in/buffer-out, zero allocation) — this feature exists so
+# `#![no_std]` consumers can opt out via `default-features = false`. `cfg(test)` code and
+# doctests always have `std` regardless of this feature, see `src/lib.rs`.
+std = []
+
 # Internal-only: re-exports this crate's own deterministic benchmark-input generators (see
 # `src/testing/bench_gen.rs`) so `benches/` targets can reuse them instead of a second,
 # potentially-drifting copy. Not part of the locked v0.1 public API, not covered by semver,
 # `#[doc(hidden)]`. Do not enable outside this crate's own benchmark targets.
-bench-support = []
+# Implies `std`: every consumer of this feature (benches/, criterion, wasmtime-based timing
+# binaries) already requires std, and this prevents `--no-default-features --features
+# bench-support` from compiling `bench_gen.rs`'s `Vec`-returning functions under `no_std`.
+bench-support = ["std"]
 
 [dependencies]
 

@@ -16,6 +16,23 @@ mod private {
 ///
 /// This trait is sealed: it can only be implemented by types defined in this crate, so
 /// adding a new required method here is never a breaking change for downstream users.
+///
+/// # Examples
+///
+/// ```
+/// use wasm_bitpack::{BitPacker, Scalar};
+///
+/// let values = vec![7u32; Scalar::BLOCK_LEN];
+/// let num_bits = Scalar::num_bits(&values);
+///
+/// let mut compressed = vec![0u8; Scalar::BLOCK_LEN * num_bits as usize / 8];
+/// let written = Scalar::compress(&values, &mut compressed, num_bits);
+///
+/// let mut decompressed = vec![0u32; Scalar::BLOCK_LEN];
+/// let read = Scalar::decompress(&compressed[..written], &mut decompressed, num_bits);
+/// assert_eq!(read, written);
+/// assert_eq!(decompressed, values);
+/// ```
 pub trait BitPacker: private::Sealed {
     /// The number of `u32` values a single block holds. `128` for every v0.1
     /// implementation.

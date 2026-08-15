@@ -169,6 +169,16 @@ fn decompress_delta_encoded(
 ///
 /// Panics if `decompressed` is not sorted in non-decreasing order (some `decompressed[i] <
 /// decompressed[i - 1]`).
+///
+/// # Examples
+///
+/// ```
+/// use wasm_bitpack::num_bits_sorted;
+///
+/// // Widest step is 15; `decompressed[0]`'s own magnitude (1_700_000_000) is irrelevant.
+/// let values = [1_700_000_000u32, 1_700_000_012, 1_700_000_012, 1_700_000_015];
+/// assert_eq!(num_bits_sorted(&values), 4);
+/// ```
 pub fn num_bits_sorted(decompressed: &[u32]) -> u8 {
     num_bits_delta_encoded(decompressed, delta_step_sorted)
 }
@@ -181,6 +191,16 @@ pub fn num_bits_sorted(decompressed: &[u32]) -> u8 {
 ///
 /// Panics if `decompressed` is not strictly increasing (some `decompressed[i] <=
 /// decompressed[i - 1]`).
+///
+/// # Examples
+///
+/// ```
+/// use wasm_bitpack::num_bits_strictly_sorted;
+///
+/// // Every consecutive step is exactly 1, so `delta - 1 == 0` for each one -> 0 bits needed.
+/// let values = [10u32, 11, 12, 13];
+/// assert_eq!(num_bits_strictly_sorted(&values), 0);
+/// ```
 pub fn num_bits_strictly_sorted(decompressed: &[u32]) -> u8 {
     num_bits_delta_encoded(decompressed, delta_step_strictly_sorted)
 }
@@ -285,6 +305,22 @@ pub fn compress_strictly_sorted(
 /// Panics if `compressed` is too small (at least 4 header bytes, plus room for
 /// `decompressed.len() - 1` deltas packed at `num_bits` bits each), or if `num_bits` is `0`
 /// or greater than `32`.
+///
+/// # Examples
+///
+/// ```
+/// use wasm_bitpack::{compress_sorted, decompress_sorted, num_bits_sorted};
+///
+/// let values = [100u32, 103, 103, 110];
+/// let num_bits = num_bits_sorted(&values);
+/// let mut compressed = vec![0u8; values.len() * 4 + 8];
+/// let written = compress_sorted(&values, &mut compressed, num_bits);
+///
+/// let mut decompressed = vec![0u32; values.len()];
+/// let read = decompress_sorted(&compressed[..written], &mut decompressed, num_bits);
+/// assert_eq!(read, written);
+/// assert_eq!(decompressed, values);
+/// ```
 pub fn decompress_sorted(compressed: &[u8], decompressed: &mut [u32], num_bits: u8) -> usize {
     decompress_delta_encoded(compressed, decompressed, num_bits, reconstruct_step_sorted)
 }
@@ -301,6 +337,22 @@ pub fn decompress_sorted(compressed: &[u8], decompressed: &mut [u32], num_bits: 
 /// Panics if `compressed` is too small (at least 4 header bytes, plus room for
 /// `decompressed.len() - 1` deltas packed at `num_bits` bits each), or if `num_bits` is `0`
 /// or greater than `32`.
+///
+/// # Examples
+///
+/// ```
+/// use wasm_bitpack::{compress_strictly_sorted, decompress_strictly_sorted, num_bits_strictly_sorted};
+///
+/// let values = [100u32, 103, 107, 110];
+/// let num_bits = num_bits_strictly_sorted(&values);
+/// let mut compressed = vec![0u8; values.len() * 4 + 8];
+/// let written = compress_strictly_sorted(&values, &mut compressed, num_bits);
+///
+/// let mut decompressed = vec![0u32; values.len()];
+/// let read = decompress_strictly_sorted(&compressed[..written], &mut decompressed, num_bits);
+/// assert_eq!(read, written);
+/// assert_eq!(decompressed, values);
+/// ```
 pub fn decompress_strictly_sorted(
     compressed: &[u8],
     decompressed: &mut [u32],
