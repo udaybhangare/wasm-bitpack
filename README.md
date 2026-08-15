@@ -1,8 +1,8 @@
 # wasm-bitpack
 
 [![CI](https://github.com/udaybhangare/wasm-bitpack/actions/workflows/ci.yml/badge.svg)](https://github.com/udaybhangare/wasm-bitpack/actions/workflows/ci.yml)
-[![crates.io](https://img.shields.io/badge/crates.io-not%20yet%20published-lightgrey)](https://crates.io/crates/wasm-bitpack)
-[![docs.rs](https://img.shields.io/badge/docs.rs-not%20yet%20published-lightgrey)](https://docs.rs/wasm-bitpack)
+[![crates.io](https://img.shields.io/crates/v/wasm-bitpack.svg)](https://crates.io/crates/wasm-bitpack)
+[![docs.rs](https://img.shields.io/docsrs/wasm-bitpack)](https://docs.rs/wasm-bitpack)
 [![license](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue)](#license)
 
 A SIMD-accelerated integer bit-packing library for Rust — with a real, hand-written
@@ -74,11 +74,12 @@ skeptical reviewer, runs to check the published numbers themselves).
 
 ## Project status
 
-Scalar reference codec, hand-written `wasm32`+`simd128` decode path, and the benchmark
-harness are all in place and passing their correctness suites — see `CHANGELOG.md` for
-what's landed so far. Not yet published to crates.io. The SIMD decode kernel doesn't yet
-beat its performance target (see Benchmarks above); encode, sorted/delta variants, and a
-crates.io release are still ahead.
+`v0.1.0` is published to crates.io. Scalar reference codec, hand-written `wasm32`+`simd128`
+decode path, encode, sorted/delta-encoded variants, and `no_std` support are all in place and
+passing their correctness suites — see `CHANGELOG.md` for the full history. The SIMD decode
+kernel does not yet beat its ≥3x throughput target against `bitpacking` (currently
+0.62x-0.66x median — see Benchmarks above); closing that gap remains an open follow-up, not
+something this release claims to have solved.
 
 ## License
 
