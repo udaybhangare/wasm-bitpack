@@ -48,7 +48,7 @@ impl BitPacker for Scalar {
             compressed.len()
         );
 
-        bitpack_into(decompressed, compressed, num_bits)
+        bitpack_interleaved_into(decompressed, compressed, num_bits)
     }
 
     fn decompress(compressed: &[u8], decompressed: &mut [u32], num_bits: u8) -> usize {
@@ -67,7 +67,7 @@ impl BitPacker for Scalar {
             compressed.len()
         );
 
-        bitunpack_into(compressed, decompressed, num_bits)
+        bitunpack_interleaved_into(compressed, decompressed, num_bits)
     }
 }
 
@@ -158,6 +158,85 @@ pub(crate) fn bitunpack_into(bytes: &[u8], out: &mut [u32], num_bits: u8) -> usi
     in_pos
 }
 
+/// Number of interleaved lanes the block-exact packed format below splits a block into — one
+/// lane per `u32` position in the WASM SIMD128 register [`Wasm128`](crate::Wasm128)'s decode
+/// kernel loads. See `plans/decisions/0010-bp128-style-packed-format.md` for the full
+/// rationale.
+const LANES: usize = 4;
+
+/// Tightly bit-packs a `BLOCK_LEN`-exact (128-value) block into `out` using the 4-way
+/// interleaved layout [`Wasm128`](crate::Wasm128)'s decode kernel expects, returning the
+/// number of bytes written: split `values` into 4 stride-4 sub-streams (lane `j` holds values
+/// `j, j+4, ..., j+124`), bit-pack each lane independently via [`bitpack_into`], then
+/// interleave the 4 lanes' packed 32-bit words round-robin (`out`'s first 4 bytes are lane 0's
+/// first word, the next 4 are lane 1's first word, and so on). See
+/// `plans/decisions/0010-bp128-style-packed-format.md`.
+///
+/// Because `values.len() / LANES` is always `32` (the only block length this crate supports),
+/// each lane's packed length is always an exact multiple of 4 bytes for every `num_bits` in
+/// `1..=32` (`32 * num_bits` bits is always a whole number of 32-bit words) — no padding, no
+/// partial words, ever, and the total output size always equals
+/// `packed_len_bytes(values.len(), num_bits)`, unchanged from the flat format.
+///
+/// Trusts its caller the same way [`bitpack_into`] does: `values.len()` must already be
+/// exactly `BLOCK_LEN` (128), `out` at least `packed_len_bytes(values.len(), num_bits)` bytes,
+/// and `num_bits` already verified to be in `1..=32`.
+pub(crate) fn bitpack_interleaved_into(values: &[u32], out: &mut [u8], num_bits: u8) -> usize {
+    let lane_len = values.len() / LANES;
+    let lane_bytes = packed_len_bytes(lane_len, num_bits);
+
+    let mut lane_values = [0u32; 32];
+    let mut lane_packed = [0u8; 128];
+
+    for lane in 0..LANES {
+        for (i, slot) in lane_values[..lane_len].iter_mut().enumerate() {
+            *slot = values[lane + i * LANES];
+        }
+        bitpack_into(
+            &lane_values[..lane_len],
+            &mut lane_packed[..lane_bytes],
+            num_bits,
+        );
+
+        for (word, chunk) in lane_packed[..lane_bytes].chunks_exact(4).enumerate() {
+            let dst = word * LANES * 4 + lane * 4;
+            out[dst..dst + 4].copy_from_slice(chunk);
+        }
+    }
+
+    lane_bytes * LANES
+}
+
+/// Unpacks `out.len()` values from `bytes`, the inverse of [`bitpack_interleaved_into`],
+/// returning the number of bytes read.
+///
+/// Trusts its caller in the same way [`bitpack_interleaved_into`] does.
+pub(crate) fn bitunpack_interleaved_into(bytes: &[u8], out: &mut [u32], num_bits: u8) -> usize {
+    let lane_len = out.len() / LANES;
+    let lane_bytes = packed_len_bytes(lane_len, num_bits);
+
+    let mut lane_values = [0u32; 32];
+    let mut lane_packed = [0u8; 128];
+
+    for lane in 0..LANES {
+        for (word, chunk) in lane_packed[..lane_bytes].chunks_exact_mut(4).enumerate() {
+            let src = word * LANES * 4 + lane * 4;
+            chunk.copy_from_slice(&bytes[src..src + 4]);
+        }
+        bitunpack_into(
+            &lane_packed[..lane_bytes],
+            &mut lane_values[..lane_len],
+            num_bits,
+        );
+
+        for (i, &value) in lane_values[..lane_len].iter().enumerate() {
+            out[lane + i * LANES] = value;
+        }
+    }
+
+    lane_bytes * LANES
+}
+
 #[cfg(test)]
 #[allow(clippy::cast_possible_truncation)] // test data lengths/values are always small
 mod tests {
@@ -220,8 +299,54 @@ mod tests {
             let mut compressed = vec![0u8; packed_len_bytes(Scalar::BLOCK_LEN, num_bits)];
             Scalar::compress(&values, &mut compressed, num_bits);
 
-            let expected = oracle::oracle_encode(&values, num_bits);
+            let expected = oracle::oracle_encode_interleaved(&values, num_bits);
             assert_eq!(compressed, expected, "mismatch at num_bits={num_bits}");
+        }
+    }
+
+    #[test]
+    fn interleaved_round_trip() {
+        for num_bits in [1u8, 3, 7, 8, 11, 16, 17, 24, 32] {
+            let modulus = 1u64 << num_bits;
+            let values: Vec<u32> = (0..Scalar::BLOCK_LEN as u64)
+                .map(|i| (i * 7 % modulus) as u32)
+                .collect();
+
+            let mut packed = vec![0u8; packed_len_bytes(Scalar::BLOCK_LEN, num_bits)];
+            let written = bitpack_interleaved_into(&values, &mut packed, num_bits);
+            assert_eq!(written, packed.len());
+
+            let mut decoded = vec![0u32; Scalar::BLOCK_LEN];
+            let read = bitunpack_interleaved_into(&packed, &mut decoded, num_bits);
+            assert_eq!(read, packed.len());
+            assert_eq!(
+                decoded, values,
+                "round-trip mismatch at num_bits={num_bits}"
+            );
+        }
+    }
+
+    /// Hand-verifiable layout check: at `num_bits == 32` each lane's `w`-th packed word is
+    /// simply that lane's `w`-th value's raw little-endian bytes (no bit-level packing
+    /// overlap), so the interleaved output at word `w`, lane `j` must be the raw bytes of
+    /// `values[j + w * 4]` — e.g. word 0 holds values `0, 1, 2, 3` (one per lane) and word 1
+    /// holds values `4, 5, 6, 7`.
+    #[test]
+    fn interleaved_known_layout_num_bits_32() {
+        let values: Vec<u32> = (0..Scalar::BLOCK_LEN as u32).collect();
+        let mut packed = vec![0u8; packed_len_bytes(Scalar::BLOCK_LEN, 32)];
+        bitpack_interleaved_into(&values, &mut packed, 32);
+
+        for word in 0..32usize {
+            for lane in 0..4usize {
+                let expected = (lane as u32 + word as u32 * 4).to_le_bytes();
+                let offset = word * 16 + lane * 4;
+                assert_eq!(
+                    &packed[offset..offset + 4],
+                    &expected,
+                    "mismatch at word={word}, lane={lane}"
+                );
+            }
         }
     }
 
@@ -283,7 +408,7 @@ mod tests {
             let mut compressed = vec![0u8; packed_len_bytes(Scalar::BLOCK_LEN, num_bits)];
             Scalar::compress(&values, &mut compressed, num_bits);
 
-            let expected = oracle::oracle_encode(&values, num_bits);
+            let expected = oracle::oracle_encode_interleaved(&values, num_bits);
             prop_assert_eq!(compressed, expected);
         }
 
@@ -303,7 +428,7 @@ mod tests {
         fn prop_decompress_matches_oracle(
             (num_bits, values) in gen::num_bits_and_block_values(Scalar::BLOCK_LEN)
         ) {
-            let compressed = oracle::oracle_encode(&values, num_bits);
+            let compressed = oracle::oracle_encode_interleaved(&values, num_bits);
 
             let mut decompressed = vec![0u32; Scalar::BLOCK_LEN];
             Scalar::decompress(&compressed, &mut decompressed, num_bits);

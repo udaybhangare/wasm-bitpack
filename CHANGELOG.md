@@ -114,3 +114,53 @@ and this project adheres to [Cargo's semver conventions](https://doc.rust-lang.o
   `decompress_sorted` against plain `unpack` on a synthetic large-timestamp/small-step
   sequence, demonstrating the effective-bit-width win this module exists for (31 bits down to
   4, in that bench's fixed example).
+- Phase 4b: rewrote the packed byte format and the `Wasm128` decode kernel to close the
+  Phase 3 performance gap, per `plans/decisions/0010-bp128-style-packed-format.md`. Root
+  cause: the Phase 2 kernel paired *sequentially adjacent* values into one `i64x2` register,
+  which forced a per-lane-divergent shift (adjacent values generally sit at different
+  intra-byte bit offsets) that WASM SIMD128 has no instruction for — faked instead with an
+  `i64x2_mul` (a genuinely expensive 64x64->64 multiply) recomputed every iteration, on top of
+  two scalar loads and two scalar stores per 2 values with no load reuse. Fix: adopted the
+  classic Lemire BP128 scheme `bitpacking::BitPacker4x` itself uses — `Scalar`'s packed format
+  for `BLOCK_LEN`-exact blocks now splits each 128-value block into 4 stride-4 sub-streams
+  (lane `j` holds values `j, j+4, ..., j+124`), bit-packs each lane independently via the
+  existing `bitpack_into`/`bitunpack_into` primitives, and interleaves the 4 lanes' packed
+  32-bit words round-robin (new `bitpack_interleaved_into`/`bitunpack_interleaved_into` in
+  `scalar.rs`, checked against an independently-built `oracle_encode_interleaved`/
+  `oracle_decode_interleaved` in `testing/oracle.rs`, plus a hand-verified known-layout test).
+  Total packed size is unchanged (`packed_len_bytes(128, num_bits)`), and the non-block-exact
+  `pack`/`unpack` tail path is untouched (still the old flat format via `bitpack_into`/
+  `bitunpack_into` directly, per `plans/decisions/0006-partial-block-api.md`). Because all 4
+  lanes now stay in phase (same relative bit position within their own sub-stream at every
+  step), `wasm128/decode_macros.rs` was rewritten to use WASM's native runtime-operand shifts
+  (`u32x4_shr`/`u32x4_shl`) directly — no multiply-as-shift trick, and loads/stores go straight
+  against the caller's slices with no zero-padded scratch buffer (every load is provably
+  in-bounds from `compressed.len() >= 16 * num_bits`). `num_bits == 32` is now a trivial
+  hand-written copy loop (no shift/mask/straddle needed at all), matching `bitpacking`'s own
+  special-casing. `wasm128/mod.rs`'s Scalar-vs-Wasm128 equivalence matrix (fixed patterns +
+  200-case proptest) needed no structural changes and passes unmodified against the new
+  format; `sorted.rs`'s delta/prefix-sum layer needed zero code changes, confirmed by its
+  existing proptest suite passing natively and under `cargo test --target wasm32-wasip1` with
+  no edits — the new kernel emits `decompressed[]` in natural sequential order by construction,
+  exactly what the prefix-sum reconstruction needs. Verified clean under `cargo test` (host),
+  `cargo +nightly miri test`, `cargo test --target wasm32-wasip1`, `cargo fmt --all -- --check`,
+  and `cargo clippy --workspace --all-targets --features bench-support -- -D warnings`.
+  **Performance result: closes most of the Phase 3 gap, but the ≥3x claim
+  (`plans/00-overview.md` §6) is still not met.** Measured at steady state (10,000,000
+  elements, both `wasm-bitpack` and `bitpacking` compiled with identical `+simd128`
+  `RUSTFLAGS`, two independent `cargo xtask bench-all` runs): median ratio vs
+  `bitpacking::BitPacker4x` improved from Phase 3's 0.41x to **0.62x-0.66x** (run 1: median
+  0.66x, range 0.55x-0.98x; run 2: median 0.62x, range 0.49x-0.94x — see
+  `plans/results/2026-08-09-decode-throughput.md` and the `-run1` backup of the first run,
+  taken before the same-dated file was overwritten). That's roughly a 50-60% throughput
+  improvement over the Phase 3 kernel at the same steady-state size, reproducible across both
+  runs within normal wall-clock noise, and the best-performing points (32-bit width, ~0.86x-
+  0.98x) come close to parity with `bitpacking` — but no bit-width/pattern combination in
+  either run reached 1x, let alone 3x. This matches the risk flagged when this phase was
+  planned: `bitpacking`'s own `wasm32` fallback already runs structurally the same BP128
+  algorithm once LLVM autovectorizes it under `+simd128`, so this phase closed a
+  self-inflicted inefficiency rather than introducing a fundamentally faster algorithm than
+  the competitor. Reported honestly per `plans/05-benchmarking-strategy.md` §6's hard rule;
+  closing the remaining gap (e.g. full compile-time unrolling of all 32 rows, mirroring
+  `bitpacking`'s own `crunchy::unroll!`, or `wasm-opt` post-processing) is left as a
+  separately-scoped follow-up, not retrofitted into this phase.

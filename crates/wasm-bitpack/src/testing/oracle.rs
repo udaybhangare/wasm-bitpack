@@ -46,6 +46,65 @@ pub(crate) fn oracle_decode(bytes: &[u8], num_bits: u8, len: usize) -> Vec<u32> 
     out
 }
 
+/// Independent ground truth for the 4-way interleaved, `BLOCK_LEN`-exact packed format (see
+/// `plans/decisions/0010-bp128-style-packed-format.md`): splits `values` into 4 stride-4
+/// sub-streams (lane `j` holds values `j, j+4, ...`), encodes each with [`oracle_encode`],
+/// then interleaves the 4 lanes' packed 32-bit words round-robin. Built independently from
+/// `scalar::bitpack_interleaved_into` (never calls it) so it's a genuine second
+/// implementation to check against, not a restatement of the same logic.
+///
+/// Requires `values.len()` to be a multiple of `32` (currently only exercised at `128`, the
+/// crate's only block length) so every lane's packed length is a whole number of 4-byte words
+/// for every `num_bits` in `1..=32` — the same invariant `bitpack_interleaved_into` relies on.
+pub(crate) fn oracle_encode_interleaved(values: &[u32], num_bits: u8) -> Vec<u8> {
+    const LANES: usize = 4;
+    assert_eq!(
+        values.len() % 32,
+        0,
+        "values.len() must be a multiple of 32"
+    );
+    let lane_len = values.len() / LANES;
+
+    let lanes: Vec<Vec<u8>> = (0..LANES)
+        .map(|lane| {
+            let lane_values: Vec<u32> = (0..lane_len).map(|i| values[lane + i * LANES]).collect();
+            oracle_encode(&lane_values, num_bits)
+        })
+        .collect();
+
+    let lane_bytes = lanes[0].len();
+    let mut out = vec![0u8; lane_bytes * LANES];
+    for (lane, packed) in lanes.iter().enumerate() {
+        for (word, chunk) in packed.chunks_exact(4).enumerate() {
+            let dst = word * LANES * 4 + lane * 4;
+            out[dst..dst + 4].copy_from_slice(chunk);
+        }
+    }
+    out
+}
+
+/// Inverse of [`oracle_encode_interleaved`], built independently the same way.
+pub(crate) fn oracle_decode_interleaved(bytes: &[u8], num_bits: u8, len: usize) -> Vec<u32> {
+    const LANES: usize = 4;
+    assert_eq!(len % 32, 0, "len must be a multiple of 32");
+    let lane_len = len / LANES;
+    let lane_bytes = bytes.len() / LANES;
+
+    let mut out = vec![0u32; len];
+    for lane in 0..LANES {
+        let mut packed = vec![0u8; lane_bytes];
+        for (word, chunk) in packed.chunks_exact_mut(4).enumerate() {
+            let src = word * LANES * 4 + lane * 4;
+            chunk.copy_from_slice(&bytes[src..src + 4]);
+        }
+        let values = oracle_decode(&packed, num_bits, lane_len);
+        for (i, value) in values.into_iter().enumerate() {
+            out[lane + i * LANES] = value;
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
